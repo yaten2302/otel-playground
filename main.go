@@ -1,1 +1,75 @@
 package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+func main() {
+	http.HandleFunc("/orders", ordersHandler)
+
+	log.Println("Server running on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func ordersHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		createOrder(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type CreateOrderRequest struct {
+	CustomerID string  `json:"customer_id"`
+	Amount     float64 `json:"amount"`
+}
+
+type OrderEvent struct {
+	OrderID    string    `json:"order_id"`
+	CustomerID string    `json:"customer_id"`
+	Amount     float64   `json:"amount"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func createOrder(w http.ResponseWriter, r *http.Request) {
+	customerID := r.URL.Query().Get("customer_id")
+	amountStr := r.URL.Query().Get("amount")
+
+	if customerID == "" || amountStr == "" {
+		http.Error(w, "customer_id and amount are required", http.StatusBadRequest)
+		return
+	}
+
+	amount, err := strconv.ParseFloat(amountStr, 64)
+	if err != nil {
+		http.Error(w, "invalid amount", http.StatusBadRequest)
+		return
+	}
+
+	orderID := uuid.New().String()
+
+	event := OrderEvent{
+		OrderID:    orderID,
+		CustomerID: customerID,
+		Amount:     amount,
+		CreatedAt:  time.Now(),
+	}
+
+	if err := publishToKafka(r.Context(), event); err != nil {
+		http.Error(w, "Failed to publish", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"order_id": orderID,
+		"status":   "accepted",
+	})
+}
