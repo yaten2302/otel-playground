@@ -1,16 +1,37 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
+var db *sql.DB
+
 func main() {
+	var err error
+
+	godotenv.Load(".env")
+
+	db, err = sql.Open("postgres", os.Getenv("DATABASE_URL"))
+	if err != nil {
+		log.Fatal("Failed to connect to database:", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	go startKafkaConsumer(ctx)
+
 	http.HandleFunc("/orders", ordersHandler)
 
 	log.Println("Server running on :8080")
