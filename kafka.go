@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -21,7 +24,7 @@ var writer = &kafka.Writer{
 
 var tracer = otel.Tracer("orders-kafka")
 
-func publishToKafka(ctx context.Context, event any) error {
+func publishToKafka(ctx context.Context, event any, failType string) error {
 	ctx, span := tracer.Start(ctx, "kafka.produce")
 	defer span.End()
 
@@ -52,6 +55,39 @@ func publishToKafka(ctx context.Context, event any) error {
 		attribute.String("messaging.destination", "orders"),
 	)
 
+	// Simulate fake Kafka broker failure
+	if failType == FailFakeKafkaBroker {
+		log.Println("Simulating fake Kafka broker failure...")
+		badWriter := &kafka.Writer{
+			Addr:                   kafka.TCP("localhost:1234"), // Invalid port
+			Topic:                  "orders.created",
+			Balancer:               &kafka.LeastBytes{},
+			AllowAutoTopicCreation: true,
+		}
+		err := badWriter.WriteMessages(ctx, msg)
+		if err != nil {
+			log.Println("Expected Kafka write error:", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "fake kafka broker failure")
+			return err
+		}
+	}
+
+	// Simulate Kafka timeout failure
+	if failType == FailKafkaTimeout {
+		log.Println("Simulating Kafka timeout")
+		timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Microsecond)
+		defer cancel()
+
+		err := writer.WriteMessages(timeoutCtx, msg)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "kafka timeout")
+			return err
+		}
+	}
+
+	// Normal publish
 	err = writer.WriteMessages(ctx, msg)
 	if err != nil {
 		log.Println("Kafka write error:", err)
@@ -105,7 +141,43 @@ func startKafkaConsumer(parentCtx context.Context) {
 			continue
 		}
 
+		bg := baggage.FromContext(ctx)
+		failType := bg.Member("fail").Value()
+
 		dbCtx, dbSpan := tracer.Start(ctx, "postgres.insert")
+
+		switch failType {
+		// Simulate SQL query failure
+		case FailSQlQuery:
+			log.Println("Simulating SQL query failure...")
+
+			_, err := db.ExecContext(dbCtx,
+				"INSERT INTO order VALUES (1)")
+			if err != nil {
+				log.Println(err)
+				dbSpan.RecordError(err)
+				dbSpan.SetStatus(codes.Error, "simulated sql query failure")
+				span.RecordError(err)
+			}
+
+			span.SetStatus(codes.Error, "simulated database failure")
+			dbSpan.End()
+			span.End()
+			continue
+
+		case FailDBTimeout:
+			log.Println("Simulating database timeout...")
+			time.Sleep(10 * time.Second)
+
+			_, err = db.ExecContext(
+				dbCtx,
+				"INSERT INTO orders (order_id, customer_id, amount, created_at) VALUES ($1,$2,$3,$4)",
+				event.OrderID,
+				event.CustomerID,
+				event.Amount,
+				event.CreatedAt,
+			)
+		}
 
 		_, err = db.ExecContext(
 			dbCtx,

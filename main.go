@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 var db *sql.DB
@@ -68,9 +69,17 @@ type OrderEvent struct {
 }
 
 func createOrder(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	customerID := r.URL.Query().Get("customer_id")
 	amountStr := r.URL.Query().Get("amount")
-	// failType := r.URL.Query().Get("fail")
+	failType := r.URL.Query().Get("fail")
+
+	if failType != "" {
+		member, _ := baggage.NewMember("fail", failType)
+		bg, _ := baggage.New(member)
+		ctx = baggage.ContextWithBaggage(ctx, bg)
+	}
 
 	if customerID == "" || amountStr == "" {
 		http.Error(w, "customer_id and amount are required", http.StatusBadRequest)
@@ -92,7 +101,12 @@ func createOrder(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now(),
 	}
 
-	if err := publishToKafka(r.Context(), event); err != nil {
+	if failType == FailContext {
+		log.Println("Simulating context propagation failure...")
+		ctx = context.Background()
+	}
+
+	if err := publishToKafka(ctx, event, failType); err != nil {
 		http.Error(w, "Failed to publish", http.StatusInternalServerError)
 		return
 	}
