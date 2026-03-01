@@ -13,14 +13,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var db *sql.DB
 
 func main() {
+	ctx := context.Background()
 	var err error
 
 	godotenv.Load(".env")
+
+	shutdown, err := setupOTelSDK(ctx)
+	if err != nil {
+		log.Fatal("Failed to set up OpenTelemetry:", err)
+	}
+	defer shutdown(ctx)
 
 	db, err = sql.Open("postgres", os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -28,11 +36,11 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx := context.Background()
-
 	go startKafkaConsumer(ctx)
 
-	http.HandleFunc("/orders", ordersHandler)
+	handler := http.HandlerFunc(ordersHandler)
+
+	http.Handle("/orders", otelhttp.NewHandler(handler, "create-orders"))
 
 	log.Println("Server running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -62,6 +70,7 @@ type OrderEvent struct {
 func createOrder(w http.ResponseWriter, r *http.Request) {
 	customerID := r.URL.Query().Get("customer_id")
 	amountStr := r.URL.Query().Get("amount")
+	// failType := r.URL.Query().Get("fail")
 
 	if customerID == "" || amountStr == "" {
 		http.Error(w, "customer_id and amount are required", http.StatusBadRequest)
