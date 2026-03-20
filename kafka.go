@@ -105,6 +105,7 @@ func startKafkaConsumer(parentCtx context.Context) {
 		GroupID:  "orders-service",
 		MinBytes: 1,
 		MaxBytes: 10e6,
+		StartOffset: kafka.FirstOffset,
 	})
 	defer reader.Close()
 

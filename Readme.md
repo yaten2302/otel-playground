@@ -72,7 +72,18 @@ This starts:
 DATABASE_URL=postgres://<user>:<password>@localhost:5432/<database_name>?sslmode=disable
 ```
 
-4. Start the application:
+4. Create the Postgres table using the following command:
+
+```bash
+CREATE TABLE orders (
+    order_id TEXT PRIMARY KEY,
+    customer_id TEXT NOT NULL,
+    amount INT NOT NULL,
+    created_at TIMESTAMP NOT NULL
+);
+```
+
+5. Start the application:
 
 ```bash
 go run .
